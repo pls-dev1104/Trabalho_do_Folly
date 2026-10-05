@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 
+enum Direcao { horizontal, vertical }
+
 class TabuleiroGameScreen extends StatefulWidget {
   final String idPartida;
   final String meuUid;
@@ -17,8 +19,93 @@ class TabuleiroGameScreen extends StatefulWidget {
 }
 
 class _TabuleiroGameScreenState extends State<TabuleiroGameScreen> {
-  List<int> naviosSelecionados = [];
-  final int maxNavios = 5;
+  // Configuração da Frota: 1 navio de 3 casas, 1 de 2 casas e 2 de 1 casa
+  final List<int> tamanhosNavios = [3, 2, 1, 1];
+  
+  // Lista que armazena os índices do tabuleiro ocupados por cada navio posicionado
+  List<List<int>> naviosPosicionados = [];
+  
+  // Direção padrão selecionada para o posicionamento
+  Direcao direcaoAtual = Direcao.horizontal;
+
+  // Retorna todos os índices ocupados por todos os navios combinados
+  List<int> get todosIndicesNavios {
+    return naviosPosicionados.expand((n) => n).toList();
+  }
+
+  // Retorna o índice do próximo navio a ser colocado (0 a 3)
+  int get navioAtualIndex => naviosPosicionados.length;
+
+  // Retorna o tamanho do navio atual que está sendo posicionado
+  int? get tamanhoNavioAtual =>
+      navioAtualIndex < tamanhosNavios.length ? tamanhosNavios[navioAtualIndex] : null;
+
+  // Mensagem explicativa para a interface
+  String get nomeNavioAtual {
+    if (tamanhoNavioAtual == null) return "Todos os navios posicionados!";
+    return "Posicione o Navio de $tamanhoNavioAtual casa${tamanhoNavioAtual! > 1 ? 's' : ''} (${navioAtualIndex + 1}/${tamanhosNavios.length})";
+  }
+
+  // Valida e calcula os índices que o navio irá ocupar
+  List<int>? _calcularIndicesNavio(int indexStart, int tamanho, Direcao direcao) {
+    int linha = indexStart ~/ 10;
+    int coluna = indexStart % 10;
+    List<int> indices = [];
+
+    if (direcao == Direcao.horizontal) {
+      if (coluna + tamanho > 10) return null; // Ultrapassa a borda direita
+      for (int i = 0; i < tamanho; i++) {
+        indices.add(linha * 10 + (coluna + i));
+      }
+    } else {
+      if (linha + tamanho > 10) return null; // Ultrapassa a borda inferior
+      for (int i = 0; i < tamanho; i++) {
+        indices.add((linha + i) * 10 + coluna);
+      }
+    }
+
+    // Verificar colisão com navios já colocados
+    final jaOcupados = todosIndicesNavios;
+    for (int idx in indices) {
+      if (jaOcupados.contains(idx)) return null; // Sobreposição
+    }
+
+    return indices;
+  }
+
+  void _tentarPosicionarNavio(int index) {
+    if (tamanhoNavioAtual == null) return; // Todos já foram colocados
+
+    List<int>? indices = _calcularIndicesNavio(index, tamanhoNavioAtual!, direcaoAtual);
+
+    if (indices != null) {
+      setState(() {
+        naviosPosicionados.add(indices);
+      });
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Posição inválida! O navio não cabe ou sobrepõe outro.'),
+          duration: Duration(seconds: 1),
+          backgroundColor: Colors.orange,
+        ),
+      );
+    }
+  }
+
+  void _desfazerUltimoNavio() {
+    if (naviosPosicionados.isNotEmpty) {
+      setState(() {
+        naviosPosicionados.removeLast();
+      });
+    }
+  }
+
+  void _limparNavios() {
+    setState(() {
+      naviosPosicionados.clear();
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -79,7 +166,7 @@ class _TabuleiroGameScreenState extends State<TabuleiroGameScreen> {
           // Confirmar navios posicionados
           Future<void> confirmarNavios() async {
             await FirebaseFirestore.instance.collection('partidas').doc(widget.idPartida).update({
-              '$meuCampo.navios': naviosSelecionados,
+              '$meuCampo.navios': todosIndicesNavios,
               '$meuCampo.pronto': true,
             });
 
@@ -170,7 +257,7 @@ class _TabuleiroGameScreenState extends State<TabuleiroGameScreen> {
                   // FASE 2: Posicionamento de Navios
                   else if (status == 'posicionando') ...[
                     Container(
-                      padding: const EdgeInsets.all(8),
+                      padding: const EdgeInsets.all(12),
                       margin: const EdgeInsets.symmetric(horizontal: 16),
                       decoration: BoxDecoration(
                         color: Colors.black26,
@@ -179,17 +266,57 @@ class _TabuleiroGameScreenState extends State<TabuleiroGameScreen> {
                       child: Column(
                         children: [
                           const Text(
-                            'Fase de Posicionamento',
+                            'Fase de Posicionamento da Frota',
                             style: TextStyle(fontSize: 16, color: Colors.white, fontWeight: FontWeight.bold),
                           ),
+                          const SizedBox(height: 4),
                           Text(
-                            'Selecione $maxNavios posições (${naviosSelecionados.length}/$maxNavios)',
-                            style: const TextStyle(fontSize: 12, color: Colors.white70),
+                            nomeNavioAtual,
+                            style: const TextStyle(fontSize: 13, color: Colors.yellowAccent, fontWeight: FontWeight.w600),
+                          ),
+                          const SizedBox(height: 8),
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              ElevatedButton.icon(
+                                onPressed: () {
+                                  setState(() {
+                                    direcaoAtual = direcaoAtual == Direcao.horizontal
+                                        ? Direcao.vertical
+                                        : Direcao.horizontal;
+                                  });
+                                },
+                                icon: Icon(
+                                  direcaoAtual == Direcao.horizontal
+                                      ? Icons.swap_horiz_rounded
+                                      : Icons.swap_vert_rounded,
+                                ),
+                                label: Text(
+                                  direcaoAtual == Direcao.horizontal ? 'Horizontal' : 'Vertical',
+                                ),
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: Colors.blue.shade800,
+                                  foregroundColor: Colors.white,
+                                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+                              IconButton(
+                                icon: const Icon(Icons.undo, color: Colors.white),
+                                tooltip: 'Desfazer último navio',
+                                onPressed: naviosPosicionados.isNotEmpty ? _desfazerUltimoNavio : null,
+                              ),
+                              IconButton(
+                                icon: const Icon(Icons.refresh, color: Colors.redAccent),
+                                tooltip: 'Limpar todos',
+                                onPressed: naviosPosicionados.isNotEmpty ? _limparNavios : null,
+                              ),
+                            ],
                           ),
                         ],
                       ),
                     ),
-                    const SizedBox(height: 12),
+                    const SizedBox(height: 8),
                     Expanded(
                       child: Center(
                         child: FittedBox(
@@ -201,25 +328,26 @@ class _TabuleiroGameScreenState extends State<TabuleiroGameScreen> {
                               gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: 10),
                               itemCount: 100,
                               itemBuilder: (context, index) {
-                                bool isSelecionado = naviosSelecionados.contains(index);
+                                bool isOcupado = todosIndicesNavios.contains(index);
+
                                 return GestureDetector(
                                   onTap: () {
                                     if (meusDados['pronto'] == true) return;
-                                    setState(() {
-                                      if (isSelecionado) {
-                                        naviosSelecionados.remove(index);
-                                      } else if (naviosSelecionados.length < maxNavios) {
-                                        naviosSelecionados.add(index);
-                                      }
-                                    });
+                                    _tentarPosicionarNavio(index);
                                   },
                                   child: AnimatedContainer(
                                     duration: const Duration(milliseconds: 250),
                                     margin: const EdgeInsets.all(1),
                                     decoration: BoxDecoration(
-                                      color: isSelecionado ? Colors.green : Colors.blue.shade300,
+                                      color: isOcupado ? Colors.green.shade600 : Colors.blue.shade300,
                                       borderRadius: BorderRadius.circular(2),
+                                      border: Border.all(color: Colors.blue.shade800, width: 0.5),
                                     ),
+                                    child: isOcupado
+                                        ? const Center(
+                                            child: Icon(Icons.directions_boat, color: Colors.white, size: 14),
+                                          )
+                                        : null,
                                   ),
                                 );
                               },
@@ -228,7 +356,7 @@ class _TabuleiroGameScreenState extends State<TabuleiroGameScreen> {
                         ),
                       ),
                     ),
-                    const SizedBox(height: 12),
+                    const SizedBox(height: 8),
                     if (meusDados['pronto'] == true)
                       const Padding(
                         padding: EdgeInsets.all(12.0),
@@ -239,7 +367,7 @@ class _TabuleiroGameScreenState extends State<TabuleiroGameScreen> {
                       )
                     else
                       ElevatedButton.icon(
-                        onPressed: naviosSelecionados.length == maxNavios ? confirmarNavios : null,
+                        onPressed: naviosPosicionados.length == tamanhosNavios.length ? confirmarNavios : null,
                         icon: const Icon(Icons.check_circle_outline),
                         label: const Text('Confirmar Posições'),
                         style: ElevatedButton.styleFrom(
@@ -248,7 +376,7 @@ class _TabuleiroGameScreenState extends State<TabuleiroGameScreen> {
                           padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
                         ),
                       ),
-                    const SizedBox(height: 16),
+                    const SizedBox(height: 12),
                   ]
 
                   // FASE 3: Partida Finalizada
